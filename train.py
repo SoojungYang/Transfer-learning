@@ -29,10 +29,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = cmd[:-1]
 
 def evaluation_step(model, dataset, multitask_metrics, model_name='', mc_dropout=False, save_outputs=False):
 
-    # num_props: label_total = np.empty([0, 4])
-    # num_props: pred_total = np.empty([0, 4])
-    label_total = np.empty([0, 1])
-    pred_total = np.empty([0, 1])
+    label_total = np.empty([0, 4])
+    pred_total = np.empty([0, 4])
 
     st = time.time()
     for batch, (x, adj, labels) in enumerate(dataset):
@@ -70,13 +68,39 @@ def evaluation_step(model, dataset, multitask_metrics, model_name='', mc_dropout
         return
 
 
+def train_step(model, optimizer, loss_fn, dataset, metrics, epoch, train_summary_writer):
+    st = time.time()
+    for (batch, (x, adj, label)) in enumerate(dataset):
+        with tf.GradientTape() as tape:
+            pred = model(x, adj, True)
+            loss = loss_fn(label, pred)
+        grads = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        for metric in metrics:
+            metric(label, pred)
+    et = time.time()
+
+    print ("Train ", end='')
+    with train_summary_writer.as_default():
+        for metric in metrics:
+            print (metric.name + ':', metric.result().numpy(), ' ', end='')
+            tf.summary.scalar(metric.name, metric.result().numpy(), step=epoch)
+            train_summary_writer.flush()
+    print ("Time:", round(et - st, 3))
+
+    for metric in metrics:
+        metric.reset_states()
+
+    return
+
+
 def train(model, smi):
     model_name = FLAGS.prefix
     model_name += '_' + str(FLAGS.num_embed_layers)
     model_name += '_' + str(FLAGS.embed_dim)
-    model_name += '_' + str(FLAGS.predictor_dim)
+    model_name += '_' + str(FLAGS.readout_dim)
     model_name += '_' + str(FLAGS.num_embed_heads)
-    model_name += '_' + str(FLAGS.num_predictor_heads)
+    model_name += '_' + str(FLAGS.num_readout_heads)
     model_name += '_' + str(FLAGS.embed_dp_rate)
     ckpt_path = './save/' + model_name + '.ckpt'
     tsbd_path = './log/' + model_name
@@ -84,10 +108,9 @@ def train(model, smi):
     num_train = int(len(smi) * 0.8)
     test_smi = smi[num_train:]
     train_smi = smi[:num_train]
-    # train_ds = get_dataset(train_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
-    # test_ds = get_dataset(test_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
-    train_ds = get_single_dataset(train_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
-    test_ds = get_single_dataset(test_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
+    train_ds = get_dataset(train_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
+    test_ds = get_dataset(test_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
+
 
     step = tf.Variable(0, trainable=False)
     schedule = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
@@ -97,35 +120,24 @@ def train(model, smi):
     lr = lambda: FLAGS.init_lr * schedule(step)
     coeff = FLAGS.prior_length * (1.0 - FLAGS.embed_dp_rate)
     # wd = lambda: coeff * schedule(step)
-    # tf.summary.scalar('learning rate', data=lr, step=epoch)
+    wd = coeff
+    regularizer = tf.keras.regularizers.l2(l=wd)
 
-    """
-    optimizer = tfa.optimizers.AdamW(
-        weight_decay=wd,
-        learning_rate=lr,
-        beta_1=FLAGS.beta_1,
-        beta_2=FLAGS.beta_2,
-        epsilon=FLAGS.opt_epsilon
-    )
-    
-    optimizer = CustomAdamW(learning_rate=FLAGS.init_lr,
-                        weight_decay_rate=coeff,
-                        beta_1=FLAGS.beta_1,
-                        beta_2=FLAGS.beta_2,
-                        epsilon=FLAGS.opt_epsilon
-                        )
-    
-    """
+    decay_attributes = ['kernel_regularizer', 'bias_regularizer',
+                        'beta_regularizer', 'gamma_regularizer']
+
+    # make this as callback
+    for layer in model.layers:
+        for attr in decay_attributes:
+            if hasattr(layer, attr):
+                setattr(layer, attr, regularizer)
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr,
                                          beta_1=FLAGS.beta_1,
                                          beta_2=FLAGS.beta_2,
                                          epsilon=FLAGS.opt_epsilon)
 
-
     # logP, TPSA, MR, MW
-    """
-    # num_props:
     model.compile(optimizer=optimizer,
                   loss={'output_1': keras.losses.MeanSquaredError(),
                         'output_2': keras.losses.MeanSquaredError(),
@@ -137,11 +149,7 @@ def train(model, smi):
                            'output_4': keras.metrics.MeanSquaredError()},
                   loss_weights={'output_1': 2., 'output_2': 2., 'output_3': 2., 'output_4': 1.}
                   )
-    """
-    model.compile(optimizer=optimizer,
-                  loss={'output_1': keras.losses.MeanSquaredError()},
-                  metrics={'output_1': keras.metrics.MeanSquaredError()}
-                  )
+
 
     callbacks = [
         keras.callbacks.ModelCheckpoint(
@@ -156,7 +164,7 @@ def train(model, smi):
             histogram_freq=1,
             embeddings_freq=1,
             update_freq='epoch'
-        )
+        ),
     ]
 
     st_total = time.time()
@@ -167,11 +175,14 @@ def train(model, smi):
                         epochs=FLAGS.num_epochs,
                         callbacks=callbacks,
                         validation_data=test_ds)
+
+
     print('\n', history.history)
 
     et_total = time.time()
     print("Total time for training:", round(et_total - st_total, 3))
     return
+
 
 
 def main(_):
@@ -180,10 +191,10 @@ def main(_):
         print("Random seed for data spliting", FLAGS.seed)
         print("Number of graph convolution layers for node embedding", FLAGS.num_embed_layers)
         print("Dimensionality of node embedding features", FLAGS.embed_dim)
-        print("Dimensionality of graph features for fine-tuning", FLAGS.predictor_dim)
+        print("Dimensionality of graph features for fine-tuning", FLAGS.readout_dim)
         print()
         print("Number of attention heads for node embedding", FLAGS.num_embed_heads)
-        print("Number of attention heads for fine-tuning", FLAGS.num_predictor_heads)
+        print("Number of attention heads for fine-tuning", FLAGS.num_readout_heads)
         print("Type of normalization", FLAGS.embed_nm_type)
         print("Whether to use feed-forward network", FLAGS.embed_use_ffnn)
         print("Dropout rate", FLAGS.embed_dp_rate)
@@ -202,20 +213,22 @@ def main(_):
             list_props=FLAGS.prop,
             num_embed_layers=FLAGS.num_embed_layers,
             embed_dim=FLAGS.embed_dim,
-            predictor_dim=FLAGS.predictor_dim,
+            readout_dim=FLAGS.readout_dim,
             num_embed_heads=FLAGS.num_embed_heads,
-            num_predictor_heads=FLAGS.num_predictor_heads,
+            num_readout_heads=FLAGS.num_readout_heads,
             embed_use_ffnn=FLAGS.embed_use_ffnn,
             embed_dp_rate=FLAGS.embed_dp_rate,
             embed_nm_type=FLAGS.embed_nm_type,
             num_groups=FLAGS.num_groups,
             last_activation=last_activation
     )
+
     print_model_spec()
 
     smi_data = open('./data/smiles_pretrain.txt', 'r')
     smi_data = [line.strip('\n') for line in smi_data.readlines()]
     train(model, smi_data)
+
     return
 
 

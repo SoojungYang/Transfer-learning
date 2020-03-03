@@ -13,9 +13,9 @@ class Model(tf.keras.Model):
                  list_props,
                  num_embed_layers,
                  embed_dim,
-                 predictor_dim,
+                 readout_dim,
                  num_embed_heads=4,
-                 num_predictor_heads=4,
+                 num_readout_heads=4,
                  embed_use_ffnn=True,
                  embed_dp_rate=0.1,
                  embed_nm_type='gn',
@@ -27,15 +27,13 @@ class Model(tf.keras.Model):
         self.num_props = len(list_props)
 
         self.first_embedding = layers.Dense(embed_dim, use_bias=False)
-        self.node_embedding = [NodeEmbedding(embed_dim, num_embed_heads,
+        self.node_embedding = [NodeEmbedding(embed_dim, readout_dim, num_embed_heads, num_readout_heads,
                                              embed_use_ffnn, embed_dp_rate, embed_nm_type, num_groups)
                                for _ in range(num_embed_layers)]
 
         self.predictors = []
-        # self.readouts = []
         for i in range(self.num_props):
-            # self.readouts.append(PMAReadout(predictor_dim, num_predictor_heads))
-            self.predictors.append(Predictor(num_predictor_heads, predictor_dim, last_activation[i], name=list_props[i]))
+            self.predictors.append(Predictor(readout_dim, last_activation[i], name=list_props[i]))
 
     def call(self, data, training):
         if type(data) == dict:
@@ -44,11 +42,16 @@ class Model(tf.keras.Model):
         else:
             x, adj = data[0], data[1]
         h = self.first_embedding(x)
+        z_list = []
         for i in range(self.num_embed_layers):
             h = self.node_embedding[i](h, adj, training)
+            z_list.append(h)
+
+        # other concat method? PMAreadout, weighted sum, etc
+        z = tf.concat(z_list, axis=1)
+
         outputs = []
         for i in range(self.num_props):
-            output = tf.squeeze(self.predictors[i](h))
+            output = tf.squeeze(self.predictors[i](z))
             outputs.append(tf.reshape(output, [-1]))
-        # num_props: return outputs[0], outputs[1], outputs[2], outputs[3]
-        return outputs
+        return outputs[0], outputs[1], outputs[2], outputs[3]

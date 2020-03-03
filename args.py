@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser()
 # Hyper-parameters for prefix, prop and random seed
 parser.add_argument('--prefix', type=str, default='test01',
                     help='Prefix for this training')
-parser.add_argument('--prop', type=str, default=['logP'],
+parser.add_argument('--prop', type=str, default=['logP', 'TPSA', 'MR', 'MW'],
                     help='Target properties to train')
 parser.add_argument('--seed', type=int, default=123,
                     help='Random seed will be used to shuffle dataset')
@@ -24,11 +24,11 @@ parser.add_argument('--num_embed_layers', type=int, default=4,
                     help='Number of node embedding layers')
 parser.add_argument('--embed_dim', type=int, default=64,
                     help='Dimension of node embeddings')
-parser.add_argument('--predictor_dim', type=int, default=256,
+parser.add_argument('--readout_dim', type=int, default=256,
                     help='Dimension of a fine-tuned z')
 parser.add_argument('--num_embed_heads', type=int, default=4,
                     help='Number of attention heads for node embedding')
-parser.add_argument('--num_predictor_heads', type=int, default=4,
+parser.add_argument('--num_readout_heads', type=int, default=4,
                     help='Number of attention heads for fine-tuning layer')
 parser.add_argument('--embed_use_ffnn', type=str2bool, default=False,
                     help='Whether to use feed-forward nets for node embedding')
