@@ -10,13 +10,63 @@ from tensorflow import keras
 from absl import app
 from absl import logging
 
-from libs.modules import *
-from libs.utils import *
-from libs.preprocess import *
-from libs.dataset import *
-from libs.layers import *
-from model import *
+from libs.utils import get_task_options
+from libs.dataset import get_csv_dataset
+from model import Model, BenchmarkModel
 from args import *
+
+
+def benchmark(_):
+    # ===============================
+    #     Tensorboard directory
+    # ===============================
+    train_log_dir = 'log/gradient_tape/' + FLAGS.prefix + '/train'
+    train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+    valid_log_dir = 'log/gradient_tape/' + FLAGS.prefix + '/valid'
+    valid_summary_writer = tf.summary.create_file_writer(valid_log_dir)
+
+    # ===============================
+    #          Load Dataset
+    # ===============================
+    f_name = 'HIV'
+    total_ds = get_csv_dataset(FLAGS.batch_size, f_name=f_name, s_name='smiles', l_name='HIV_active')
+    train_ds = total_ds.take(30000)
+    test_ds = total_ds.skip(30000)
+
+    # ===============================
+    #      Load Pre-trained Model
+    # ===============================
+    model, optimizer = define_model()
+    model.load_weights(FLAGS.ckpt_path)
+    print("loaded weights of pre-trained model")
+    print(model.layers)
+
+    # ===============================
+    #        Attach Predictor
+    # ===============================
+    benchmark_last_activation, loss, metrics = get_task_options(FLAGS.benchmark_task_type)
+    model = BenchmarkModel(model,
+                           readout=FLAGS.benchmark_readout,
+                           dp_rate=FLAGS.benchmark_dp_rate,
+                           fine_tune_at=FLAGS.fine_tune_at,
+                           last_activation=benchmark_last_activation)
+    print("Stacked Encoder and prediction layer")
+    print(model.layers)
+
+    # ===============================
+    #          Train Model
+    # ===============================
+    for epoch in range(FLAGS.num_epochs):
+        train_step(model, optimizer, loss, train_ds, metrics, epoch, train_summary_writer)
+        evaluation_step(model, test_ds, metrics, epoch, valid_summary_writer)
+
+    if FLAGS.save_outputs:
+        print ("Save the predictions for test dataset")
+        model_name = f_name
+        save_outputs(model, test_ds, metrics, model_name)
+
+    print(model.summary())
+    return
 
 
 def save_outputs(model, dataset, metrics, model_name):
@@ -24,8 +74,8 @@ def save_outputs(model, dataset, metrics, model_name):
     pred_total = np.empty([0, ])
 
     st = time.time()
-    for batch, (x, adj, label) in enumerate(dataset):
-        pred = model(x, adj, False)
+    for batch, (data, label) in enumerate(dataset):
+        pred = model(data, False)
 
         label_total = np.concatenate((label_total, label.numpy()), axis=0)
         pred_total = np.concatenate((pred_total, pred.numpy()), axis=0)
@@ -48,39 +98,11 @@ def save_outputs(model, dataset, metrics, model_name):
     return
 
 
-class BenchmarkModel(tf.keras.Model):
-    def __init__(self,
-                 model,
-                 fine_tune_at=0,
-                 last_activation=None):
-        super(BenchmarkModel, self).__init__()
-
-        self.pre_trained = model.layers[:5]
-        self.readout = PMAReadout(128, 2)
-        self.prediction = keras.layers.Dense(32)
-        self.f_prediction = keras.layers.Dense(1)
-        self.last_activation = last_activation
-        self.dropout = keras.layers.Dropout(FLAGS.benchmark_dp_rate)
-
-        for layer in self.pre_trained[:fine_tune_at]:
-            layer.trainable = False
-
-    def call(self, data, training=True):
-        x, adj = data['x'], data['a']
-        h = self.pre_trained[0](x)
-        for i in range(1, 5):
-            h = self.pre_trained[i](h, adj)
-        h = self.readout(h)
-        h = tf.reshape(h, [-1, 128])
-        h = self.dropout(self.prediction(h), training=training)
-        outputs = self.last_activation(self.f_prediction(h))
-        outputs = tf.squeeze(outputs)
-        return outputs
-
-
-
 def train_step(model, optimizer, loss_fn, dataset, metrics, epoch, train_summary_writer):
     st = time.time()
+    # ===============================
+    #          Train Model
+    # ===============================
     for (batch, (data, label)) in enumerate(dataset):
         with tf.GradientTape() as tape:
             pred = model(data, True)
@@ -90,8 +112,11 @@ def train_step(model, optimizer, loss_fn, dataset, metrics, epoch, train_summary
         for metric in metrics:
             metric(label, pred)
     et = time.time()
-
     print ("Train ", end='')
+
+    # ===============================
+    #         Log Metrics
+    # ===============================
     with train_summary_writer.as_default():
         for metric in metrics:
             print (metric.name + ':', metric.result().numpy(), ' ', end='')
@@ -107,8 +132,10 @@ def train_step(model, optimizer, loss_fn, dataset, metrics, epoch, train_summary
 
 def evaluation_step(model, dataset, metrics, epoch, valid_summary_writer, mc_dropout=False):
     st = time.time()
+    # ===============================
+    #           Evaluate
+    # ===============================
     for (batch, (data, label)) in enumerate(dataset):
-
         pred = None
         if mc_dropout:
             pred = [model(data, True) for _ in range(FLAGS.mc_sampling)]
@@ -119,9 +146,11 @@ def evaluation_step(model, dataset, metrics, epoch, valid_summary_writer, mc_dro
         for metric in metrics:
             metric(label, pred)
     et = time.time()
-
     print ("Test ", end='')
 
+    # ===============================
+    #         Log Metrics
+    # ===============================
     with valid_summary_writer.as_default():
         for metric in metrics:
             print (metric.name + ':', metric.result().numpy(), ' ', end='')
@@ -132,44 +161,6 @@ def evaluation_step(model, dataset, metrics, epoch, valid_summary_writer, mc_dro
     for metric in metrics:
         metric.reset_states()
 
-    return
-
-
-def benchmark(_):
-    train_log_dir = 'log/gradient_tape/' + FLAGS.prefix + '/train'
-    train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-    valid_log_dir = 'log/gradient_tape/' + FLAGS.prefix + '/valid'
-    valid_summary_writer = tf.summary.create_file_writer(valid_log_dir)
-
-
-    train_folds = 'cv_3_tr'
-    test_fold = 'cv_3'
-    train_ds = get_5fold_dataset(FLAGS.batch_size, train_folds)
-    test_ds = get_5fold_dataset(FLAGS.batch_size, test_fold)
-
-    model, optimizer = define_model()
-    model.load_weights(FLAGS.ckpt_path)
-    print("loaded weights of pre-trained model")
-    print(model.layers)
-
-    benchmark_last_activation, loss, metrics = get_task_options('cls')
-
-    # Transfer pre-trained weights into Benchmark Model
-    model = BenchmarkModel(model, FLAGS.fine_tune_at, tf.nn.sigmoid)
-    print("Stacked Encoder and prediction layer")
-    print(model.layers)
-
-    # Fine tune model
-    for epoch in range(FLAGS.num_epochs):
-        train_step(model, optimizer, loss, train_ds, metrics, epoch, train_summary_writer)
-        evaluation_step(model, test_ds, metrics, epoch, valid_summary_writer)
-
-    if FLAGS.save_outputs:
-        print ("Save the predictions for test dataset")
-        model_name = test_fold
-        save_outputs(model, test_ds, metrics, model_name)
-
-    print(model.summary())
     return
 
 
@@ -203,7 +194,6 @@ def define_model():
         num_groups=FLAGS.num_groups,
         last_activation=last_activation
     )
-
 
     optimizer = tfa.optimizers.AdamW(
         weight_decay=wd,

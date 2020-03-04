@@ -14,12 +14,14 @@ parser = argparse.ArgumentParser()
 # Hyper-parameters for prefix, prop and random seed
 parser.add_argument('--prefix', type=str, default='test01',
                     help='Prefix for this training')
-parser.add_argument('--prop', type=str, default=['logP'],
+parser.add_argument('--prop', type=str, default=['logP', 'TPSA', 'MR', 'MW'],
                     help='Target properties to train')
 parser.add_argument('--seed', type=int, default=123,
                     help='Random seed will be used to shuffle dataset')
 
 # Hyper-parameters for model construction
+parser.add_argument("--gconv_type", type=str, default='GAT',
+                    help='GAT or GCN')
 parser.add_argument('--num_embed_layers', type=int, default=4,
                     help='Number of node embedding layers')
 parser.add_argument('--embed_dim', type=int, default=64,
@@ -93,5 +95,7 @@ parser.add_argument('--fine_tune_at', type=int, default=0,
                     help='how many layers to freeze')
 parser.add_argument('--benchmark_task_type', type=str, default='cls',
                     help='reg of cls')
-parser.add_argument('--benchmark_dp_rate', type=float, default=0.1,
+parser.add_argument('--benchmark_dp_rate', type=float, default=0.0,
                     help='Dropout rates in benchmark layers')
+parser.add_argument('--benchmark_readout', type=str, default='sum',
+                    help='pma or sum')

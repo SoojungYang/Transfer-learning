@@ -11,13 +11,10 @@ import tensorflow_addons as tfa
 from absl import app
 from absl import logging
 
-from libs.modules import *
-from libs.utils import *
-from libs.preprocess import *
-from libs.dataset import *
-from model import *
+from libs.utils import set_cuda_visible_device
+from libs.dataset import get_multitask_dataset
+from model import Model
 from args import *
-
 
 FLAGS = None
 np.set_printoptions(3)
@@ -26,48 +23,6 @@ tf.random.set_seed(1234)
 cmd = set_cuda_visible_device(1)
 print("Using ", cmd[:-1], "-th GPU")
 os.environ["CUDA_VISIBLE_DEVICES"] = cmd[:-1]
-
-def evaluation_step(model, dataset, multitask_metrics, model_name='', mc_dropout=False, save_outputs=False):
-
-    # num_props: label_total = np.empty([0, 4])
-    # num_props: pred_total = np.empty([0, 4])
-    label_total = np.empty([0, 1])
-    pred_total = np.empty([0, 1])
-
-    st = time.time()
-    for batch, (x, adj, labels) in enumerate(dataset):
-
-        if mc_dropout:
-            preds = [model(x, adj, True) for _ in range(FLAGS.mc_sampling)]
-            preds = tf.reduce_mean(preds, axis=1)
-        else:
-            preds = model(x, adj, False)
-
-        if save_outputs:
-            label_total = np.concatenate((label_total, labels.numpy()), axis=0)
-            pred_total = np.concatenate((pred_total, preds.numpy()), axis=0)
-
-        for i in range(len(multitask_metrics)):
-            for metric in multitask_metrics[i]:
-                metric(labels[i], preds[i])
-
-    et = time.time()
-    print("Test ", end='')
-    for i in range(len(multitask_metrics)):
-        print(FLAGS.prop[i], end='')
-        for metric in multitask_metrics[i]:
-            print(metric.name + ':', metric.result().numpy(), ' ', end='')
-            metric.reset_states()
-    print("Time:", round(et - st, 3))
-
-    if save_outputs:
-        model_name += '_' + str(mc_dropout)
-        np.save('./outputs/' + model_name + '_label.npy', label_total)
-        np.save('./outputs/' + model_name + '_pred.npy', pred_total)
-        return label_total, pred_total
-
-    else:
-        return
 
 
 def train(model, smi):
@@ -81,14 +36,18 @@ def train(model, smi):
     ckpt_path = './save/' + model_name + '.ckpt'
     tsbd_path = './log/' + model_name
 
+    # ===============================
+    #         Load Dataset
+    # ===============================
     num_train = int(len(smi) * 0.8)
     test_smi = smi[num_train:]
     train_smi = smi[:num_train]
-    # train_ds = get_dataset(train_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
-    # test_ds = get_dataset(test_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
-    train_ds = get_single_dataset(train_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
-    test_ds = get_single_dataset(test_smi, FLAGS.shuffle_buffer_size, FLAGS.batch_size)
+    train_ds = get_multitask_dataset(train_smi, FLAGS.batch_size)
+    test_ds = get_multitask_dataset(test_smi, FLAGS.batch_size)
 
+    # ===============================
+    # Learning Rate and Weight Decay
+    # ===============================
     step = tf.Variable(0, trainable=False)
     schedule = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
         boundaries=[FLAGS.decay_steps, FLAGS.decay_steps * 2],
@@ -97,52 +56,43 @@ def train(model, smi):
     lr = lambda: FLAGS.init_lr * schedule(step)
     coeff = FLAGS.prior_length * (1.0 - FLAGS.embed_dp_rate)
     # wd = lambda: coeff * schedule(step)
-    # tf.summary.scalar('learning rate', data=lr, step=epoch)
+    regularizer = tf.keras.regularizers.l2(l=coeff)
 
-    """
-    optimizer = tfa.optimizers.AdamW(
-        weight_decay=wd,
-        learning_rate=lr,
-        beta_1=FLAGS.beta_1,
-        beta_2=FLAGS.beta_2,
-        epsilon=FLAGS.opt_epsilon
-    )
-    
-    optimizer = CustomAdamW(learning_rate=FLAGS.init_lr,
-                        weight_decay_rate=coeff,
-                        beta_1=FLAGS.beta_1,
-                        beta_2=FLAGS.beta_2,
-                        epsilon=FLAGS.opt_epsilon
-                        )
-    
-    """
+    decay_attributes = ['kernel_regularizer', 'bias_regularizer',
+                        'beta_regularizer', 'gamma_regularizer']
 
+    for layer in model.layers:
+        for attr in decay_attributes:
+            if hasattr(layer, attr):
+                setattr(layer, attr, regularizer)
+
+    # ===============================
+    #          Optimizer
+    # ===============================
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr,
                                          beta_1=FLAGS.beta_1,
                                          beta_2=FLAGS.beta_2,
                                          epsilon=FLAGS.opt_epsilon)
 
-
-    # logP, TPSA, MR, MW
-    """
-    # num_props:
+    # ==========================================
+    #   Compile Model with Losses and Metrics
+    # ==========================================
+    metric_list = [keras.metrics.MeanSquaredError(), keras.metrics.RootMeanSquaredError(), keras.metrics.MeanAbsoluteError()]
     model.compile(optimizer=optimizer,
                   loss={'output_1': keras.losses.MeanSquaredError(),
                         'output_2': keras.losses.MeanSquaredError(),
                         'output_3': keras.losses.MeanSquaredError(),
                         'output_4': keras.losses.MeanSquaredError()},
-                  metrics={'output_1': keras.metrics.MeanSquaredError(),
-                           'output_2': keras.metrics.MeanSquaredError(),
-                           'output_3': keras.metrics.MeanSquaredError(),
-                           'output_4': keras.metrics.MeanSquaredError()},
+                  metrics={'output_1': metric_list,
+                           'output_2': metric_list,
+                           'output_3': metric_list,
+                           'output_4': metric_list},
                   loss_weights={'output_1': 2., 'output_2': 2., 'output_3': 2., 'output_4': 1.}
                   )
-    """
-    model.compile(optimizer=optimizer,
-                  loss={'output_1': keras.losses.MeanSquaredError()},
-                  metrics={'output_1': keras.metrics.MeanSquaredError()}
-                  )
 
+    # ===============================
+    #          Callbacks
+    # ===============================
     callbacks = [
         keras.callbacks.ModelCheckpoint(
             filepath=ckpt_path,
@@ -162,7 +112,9 @@ def train(model, smi):
     st_total = time.time()
     print("model compiled and callbacks set")
 
-
+    # ===============================
+    #          Train Model
+    # ===============================
     history = model.fit(train_ds,
                         epochs=FLAGS.num_epochs,
                         callbacks=callbacks,
@@ -191,6 +143,9 @@ def main(_):
         print()
         return
 
+    # ===============================
+    #     Set Up Last Activation
+    # ===============================
     last_activation = []
     for prop in FLAGS.prop:
         if FLAGS.loss_dict[prop] == 'mse':
@@ -198,21 +153,28 @@ def main(_):
         else:
             last_activation.append(tf.nn.sigmoid)
 
+    # ===============================
+    #          Define Model
+    # ===============================
     model = Model(
-            list_props=FLAGS.prop,
-            num_embed_layers=FLAGS.num_embed_layers,
-            embed_dim=FLAGS.embed_dim,
-            predictor_dim=FLAGS.predictor_dim,
-            num_embed_heads=FLAGS.num_embed_heads,
-            num_predictor_heads=FLAGS.num_predictor_heads,
-            embed_use_ffnn=FLAGS.embed_use_ffnn,
-            embed_dp_rate=FLAGS.embed_dp_rate,
-            embed_nm_type=FLAGS.embed_nm_type,
-            num_groups=FLAGS.num_groups,
-            last_activation=last_activation
+        list_props=FLAGS.prop,
+        num_embed_layers=FLAGS.num_embed_layers,
+        embed_dim=FLAGS.embed_dim,
+        predictor_dim=FLAGS.predictor_dim,
+        num_embed_heads=FLAGS.num_embed_heads,
+        num_predictor_heads=FLAGS.num_predictor_heads,
+        embed_use_ffnn=FLAGS.embed_use_ffnn,
+        embed_dp_rate=FLAGS.embed_dp_rate,
+        embed_nm_type=FLAGS.embed_nm_type,
+        num_groups=FLAGS.num_groups,
+        gconv_type=FLAGS.gconv_type,
+        last_activation=last_activation
     )
     print_model_spec()
 
+    # ===============================
+    #    Load Data and Train Model
+    # ===============================
     smi_data = open('./data/smiles_pretrain.txt', 'r')
     smi_data = [line.strip('\n') for line in smi_data.readlines()]
     train(model, smi_data)

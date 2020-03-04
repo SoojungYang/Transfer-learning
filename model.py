@@ -20,6 +20,7 @@ class Model(tf.keras.Model):
                  embed_dp_rate=0.1,
                  embed_nm_type='gn',
                  num_groups=8,
+                 gconv_type='GAT',
                  last_activation=None):
         super(Model, self).__init__()
 
@@ -28,13 +29,11 @@ class Model(tf.keras.Model):
 
         self.first_embedding = layers.Dense(embed_dim, use_bias=False)
         self.node_embedding = [NodeEmbedding(embed_dim, num_embed_heads,
-                                             embed_use_ffnn, embed_dp_rate, embed_nm_type, num_groups)
+                                             embed_use_ffnn, embed_dp_rate, embed_nm_type, num_groups, gconv_type)
                                for _ in range(num_embed_layers)]
 
         self.predictors = []
-        # self.readouts = []
         for i in range(self.num_props):
-            # self.readouts.append(PMAReadout(predictor_dim, num_predictor_heads))
             self.predictors.append(Predictor(num_predictor_heads, predictor_dim, last_activation[i], name=list_props[i]))
 
     def call(self, data, training):
@@ -50,5 +49,4 @@ class Model(tf.keras.Model):
         for i in range(self.num_props):
             output = tf.squeeze(self.predictors[i](h))
             outputs.append(tf.reshape(output, [-1]))
-        # num_props: return outputs[0], outputs[1], outputs[2], outputs[3]
-        return outputs
+        return outputs[0], outputs[1], outputs[2], outputs[3]
