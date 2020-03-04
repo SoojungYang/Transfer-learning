@@ -31,11 +31,14 @@ class NodeEmbedding(layers.Layer):
         self.dropout = tf.keras.layers.Dropout(dropout_rate)
         self.nm_type = nm_type
 
+        self.is_norm = True
         if nm_type == 'gn':
             # TODO: Fix group norm axis (channels last setup)
             self.norm = tfa.layers.GroupNormalization(groups=num_groups, axis=-1)
-        else:
+        if nm_type == 'ln':
             self.norm = tf.keras.layers.LayerNormalization()
+        else:
+            self.is_norm = False
 
     def call(self, x, adj, training):
         h = x
@@ -46,7 +49,9 @@ class NodeEmbedding(layers.Layer):
 
         h = self.dropout(h, training=training)
         h += x
-        h = self.norm(h)
+
+        if self.is_norm:
+            h = self.norm(h)
         return h
 
 

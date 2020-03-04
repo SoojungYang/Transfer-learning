@@ -3,7 +3,8 @@ import numpy as np
 
 import tensorflow as tf
 
-from libs.preprocess import *
+from libs.preprocess import convert_smiles_to_graph, convert_csv_to_graph, \
+                            get_csv_label, calc_properties, logP_benchmark
 
 
 def x_to_dict(x, a):
@@ -22,12 +23,10 @@ def read_csv(prop, s_name, l_name, seed, shuffle):
     return contents
 
 
-def get_dataset(smi,
-                shuffle_buffer_size,
-                batch_size):
+def get_multitask_dataset(smi,
+                          batch_size):
 
     smi = tf.data.Dataset.from_tensor_slices(smi)
-    smi = smi.shuffle(shuffle_buffer_size)
     ds = smi.map(
         lambda x: tf.py_function(func=convert_smiles_to_graph,
                                  inp=[x],
@@ -47,8 +46,8 @@ def get_dataset(smi,
 
 
 def get_single_dataset(smi,
-                shuffle_buffer_size,
-                batch_size):
+                       shuffle_buffer_size,
+                       batch_size):
 
     smi = tf.data.Dataset.from_tensor_slices(smi)
     smi = smi.shuffle(shuffle_buffer_size)
@@ -70,50 +69,24 @@ def get_single_dataset(smi,
     return ds
 
 
-def get_benchmark_dataset(smi,
-                          property_func,
-                          shuffle_buffer_size,
-                          batch_size):
-
-    smi = tf.data.Dataset.from_tensor_slices(smi)
-    smi = smi.shuffle(shuffle_buffer_size)
-    ds = smi.map(
-        lambda x: tf.py_function(func=convert_smiles_to_graph,
-                                 inp=[x],
-                                 Tout=[tf.float32, tf.float32]),
-        num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    ds = ds.padded_batch(batch_size, padded_shapes=([None, 58], [None, None]))
-    ds = ds.map(x_to_dict)
-
-    y = smi.map(
-        lambda x: tf.py_function(func=property_func,
-                                 inp=[x], Tout=tf.float32),
-        num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    y = y.padded_batch(batch_size, padded_shapes=([]))
-    ds = tf.data.Dataset.zip((ds, y))
-    ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
-    return ds
-
-
-def get_5fold_dataset(batch_size, folds, seed=123, shuffle=True):
-    smi = read_csv(folds, 'smiles', 'tox', seed, shuffle)
+def get_csv_dataset(batch_size, f_name, s_name, l_name, seed=123, shuffle=True):
+    smi = read_csv(f_name, s_name, l_name, seed, shuffle)
     smi = tf.data.Dataset.from_tensor_slices(smi)
 
     smi = smi.prefetch(tf.data.experimental.AUTOTUNE)
-    smi = smi.shuffle(buffer_size=10 * batch_size)
     ds = smi.map(
-        lambda x: tf.py_function(func=convert_tox_to_graph,
+        lambda x: tf.py_function(func=convert_csv_to_graph,
                                  inp=[x],
                                  Tout=[tf.float32, tf.float32]),
         num_parallel_calls=7
     )
 
-    ds = ds.apply(tf.data.experimental.ignore_errors())
+    # ds = ds.apply(tf.data.experimental.ignore_errors())
     ds = ds.padded_batch(batch_size, padded_shapes=([None, 58], [None, None]))
     ds = ds.map(x_to_dict)
 
     y = smi.map(
-        lambda x: tf.py_function(func=get_label,
+        lambda x: tf.py_function(func=get_csv_label,
                                  inp=[x],
                                  Tout=tf.float32),
         num_parallel_calls=7
@@ -122,3 +95,4 @@ def get_5fold_dataset(batch_size, folds, seed=123, shuffle=True):
     ds = tf.data.Dataset.zip((ds, y))
     ds = ds.cache()
     return ds
+

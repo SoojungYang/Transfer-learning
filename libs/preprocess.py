@@ -46,7 +46,7 @@ def convert_smiles_to_graph(smi):
         return graph
 
 
-def convert_tox_to_graph(smi_and_label):
+def convert_csv_to_graph(smi_and_label):
     smi = smi_and_label[0].numpy()
     mol = Chem.MolFromSmiles(smi)
     if mol is not None:
@@ -61,8 +61,10 @@ def get_label(smi_and_label):
 
 
 def calc_properties(smi):
-    # returns logP, TPSA, MW, MR
-    # normalize quantities
+    """
+    :param smi:
+    :return: logP, TPSA, MR, MW
+    """
     m = Chem.MolFromSmiles(smi.numpy())
     logP = np.asarray(MolLogP(m))
     logP = (logP - LOGP_MEAN) / LOGP_STD
@@ -80,7 +82,7 @@ def calc_properties(smi):
     mr = np.asarray(MolMR(m))
     mr = np.log10(mr + 1)
     mr = (mr - MR_MEAN) / MR_STD
-    return logP, tpsa, mw, mr
+    return logP, tpsa, mr, mw
 
 
 def logP_benchmark(smi):
@@ -88,10 +90,3 @@ def logP_benchmark(smi):
     logP = np.asarray(MolLogP(m))
     logP = (logP - LOGP_MEAN) / LOGP_STD
     return logP
-
-
-if __name__ == '__main__':
-    smi_file = sys.argv[1]
-    save_path = sys.argv[2]
-    smi_list = open(smi_file, 'r').readlines()
-    preprocess_inputs(smi_list, save_path)
