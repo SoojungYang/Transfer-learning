@@ -21,13 +21,15 @@ parser.add_argument('--prefix', type=str, default='test01',
 # Hyper-parameters for model construction
 parser.add_argument("--gconv_type", type=str, default='GAT',
                     help='GAT or GCN')
+parser.add_argument("--predictor_readout", type=str, default='pma',
+                    help='sum or pma')
 parser.add_argument('--num_embed_layers', type=int, default=4,
                     help='Number of node embedding layers')
 
 # Normalization
 parser.add_argument("--embed_nm_type", type=str, default='ln',
                     help='Type of normalization: gn or ln')
-parser.add_argument("--num_groups", type=int, default=1,
+parser.add_argument("--num_gn_groups", type=int, default=1,
                     help='Number of groups for group normalization')
 
 # Weight decay

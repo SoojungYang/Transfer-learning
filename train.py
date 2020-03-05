@@ -158,6 +158,8 @@ def main(_):
     # ===============================
     model = Model(
         list_props=FLAGS.prop,
+        gconv_type=FLAGS.gconv_type,
+        predictor_readout=FLAGS.predictor_readout,
         num_embed_layers=FLAGS.num_embed_layers,
         embed_dim=FLAGS.embed_dim,
         predictor_dim=FLAGS.predictor_dim,
@@ -166,8 +168,7 @@ def main(_):
         embed_use_ffnn=FLAGS.embed_use_ffnn,
         embed_dp_rate=FLAGS.embed_dp_rate,
         embed_nm_type=FLAGS.embed_nm_type,
-        num_groups=FLAGS.num_groups,
-        gconv_type=FLAGS.gconv_type,
+        num_groups=FLAGS.num_gn_groups,
         last_activation=last_activation
     )
     print_model_spec()
