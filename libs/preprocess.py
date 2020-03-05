@@ -55,7 +55,7 @@ def convert_csv_to_graph(smi_and_label):
         return [feature, adj]
 
 
-def get_label(smi_and_label):
+def get_csv_label(smi_and_label):
     label = float(smi_and_label[1].numpy())
     return np.asarray(label)
 
