@@ -11,7 +11,7 @@ import tensorflow_addons as tfa
 from absl import app
 from absl import logging
 
-from libs.utils import set_cuda_visible_device
+from libs.utils import set_cuda_visible_device, get_regularizer
 from libs.dataset import get_multitask_dataset
 from model import Model
 from args import *
@@ -56,8 +56,8 @@ def train(model, smi):
     lr = lambda: FLAGS.init_lr * schedule(step)
     coeff = FLAGS.prior_length * (1.0 - FLAGS.embed_dp_rate)
     # wd = lambda: coeff * schedule(step)
-    regularizer = tf.keras.regularizers.l2(l=coeff)
 
+    regularizer = get_regularizer(FLAGS.reg_type, coeff)
     decay_attributes = ['kernel_regularizer', 'bias_regularizer',
                         'beta_regularizer', 'gamma_regularizer']
 

@@ -5,6 +5,7 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 
 from libs.lr_scheduler import WarmUpSchedule
+from libs.layers import ws_reg
 
 
 def set_cuda_visible_device(ngpus):
@@ -76,3 +77,12 @@ def get_task_options(benchmark_task_type):
             tf.keras.metrics.Precision(name='Precision'),
             tf.keras.metrics.Recall(name='Recall'),
         ]
+
+
+def get_regularizer(reg_type, wd=0.0):
+    if reg_type == 'ws_reg':
+        return ws_reg
+    elif reg_type == 'l2_reg':
+        return tf.keras.regularizers.l2(l=wd)
+    else:
+        return None

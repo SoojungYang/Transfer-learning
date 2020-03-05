@@ -21,8 +21,6 @@ def ws_reg(kernel):
 class GraphConv(layers.Layer):
     def __init__(self, out_dim, pre_act, **kwargs):
         super(GraphConv, self).__init__(**kwargs)
-
-        # self.dense = tf.keras.layers.Dense(units=out_dim, use_bias=False, kernel_regularizer=ws_reg)
         self.dense = tf.keras.layers.Dense(units=out_dim, use_bias=False)
         self.act = tf.nn.relu
         self.pre_act = pre_act

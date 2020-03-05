@@ -31,6 +31,8 @@ parser.add_argument("--num_groups", type=int, default=1,
                     help='Number of groups for group normalization')
 
 # Weight decay
+parser.add_argument('--reg_type', type=str, default='l2_reg',
+                    help='regularizer type, l2_reg or ws_reg or None')
 parser.add_argument('--prior_length', type=float, default=1e-4,
                     help='Weight decay coefficient')
 
