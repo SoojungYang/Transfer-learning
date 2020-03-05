@@ -11,7 +11,7 @@ import tensorflow_addons as tfa
 from absl import app
 from absl import logging
 
-from libs.utils import set_cuda_visible_device, get_regularizer
+from libs.utils import set_cuda_visible_device, WeightDecayCallback
 from libs.dataset import get_multitask_dataset
 from model import Model
 from args import *
@@ -25,7 +25,46 @@ print("Using ", cmd[:-1], "-th GPU")
 os.environ["CUDA_VISIBLE_DEVICES"] = cmd[:-1]
 
 
-def train(model, smi):
+def define_model():
+    # ===============================
+    #   Optimizer and Weight Decay
+    # ===============================
+    optimizer = tf.keras.optimizers.Adam(learning_rate=FLAGS.init_lr,
+                                         beta_1=FLAGS.beta_1,
+                                         beta_2=FLAGS.beta_2,
+                                         epsilon=FLAGS.opt_epsilon)
+    # ===============================
+    #     Set Up Last Activation
+    # ===============================
+    last_activation = []
+    for prop in FLAGS.prop:
+        if FLAGS.loss_dict[prop] == 'mse':
+            last_activation.append(None)
+        else:
+            last_activation.append(tf.nn.sigmoid)
+
+    # ===============================
+    #          Define Model
+    # ===============================
+    model = Model(
+        list_props=FLAGS.prop,
+        gconv_type=FLAGS.gconv_type,
+        predictor_readout=FLAGS.predictor_readout,
+        num_embed_layers=FLAGS.num_embed_layers,
+        embed_dim=FLAGS.embed_dim,
+        predictor_dim=FLAGS.predictor_dim,
+        num_embed_heads=FLAGS.num_embed_heads,
+        num_predictor_heads=FLAGS.num_predictor_heads,
+        embed_use_ffnn=FLAGS.embed_use_ffnn,
+        embed_dp_rate=FLAGS.embed_dp_rate,
+        embed_nm_type=FLAGS.embed_nm_type,
+        num_groups=FLAGS.num_gn_groups,
+        last_activation=last_activation
+    )
+    return model, optimizer
+
+
+def train(model, optimizer, smi):
     model_name = FLAGS.prefix
     model_name += '_' + str(FLAGS.num_embed_layers)
     model_name += '_' + str(FLAGS.embed_dim)
@@ -44,35 +83,6 @@ def train(model, smi):
     train_smi = smi[:num_train]
     train_ds = get_multitask_dataset(train_smi, FLAGS.batch_size)
     test_ds = get_multitask_dataset(test_smi, FLAGS.batch_size)
-
-    # ===============================
-    # Learning Rate and Weight Decay
-    # ===============================
-    step = tf.Variable(0, trainable=False)
-    schedule = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
-        boundaries=[FLAGS.decay_steps, FLAGS.decay_steps * 2],
-        values=[1.0, 0.5, 0.1],
-    )
-    lr = lambda: FLAGS.init_lr * schedule(step)
-    coeff = FLAGS.prior_length * (1.0 - FLAGS.embed_dp_rate)
-    # wd = lambda: coeff * schedule(step)
-
-    regularizer = get_regularizer(FLAGS.reg_type, coeff)
-    decay_attributes = ['kernel_regularizer', 'bias_regularizer',
-                        'beta_regularizer', 'gamma_regularizer']
-
-    for layer in model.layers:
-        for attr in decay_attributes:
-            if hasattr(layer, attr):
-                setattr(layer, attr, regularizer)
-
-    # ===============================
-    #          Optimizer
-    # ===============================
-    optimizer = tf.keras.optimizers.Adam(learning_rate=lr,
-                                         beta_1=FLAGS.beta_1,
-                                         beta_2=FLAGS.beta_2,
-                                         epsilon=FLAGS.opt_epsilon)
 
     # ==========================================
     #   Compile Model with Losses and Metrics
@@ -93,11 +103,25 @@ def train(model, smi):
     # ===============================
     #          Callbacks
     # ===============================
+    wd_coeff = FLAGS.prior_length * (1.0 - FLAGS.embed_dp_rate)
     callbacks = [
+        keras.callbacks.ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.1,
+            patience=5,
+            verbose=1,
+            min_delta=0.0001,
+            min_lr=1e-5
+        ),
+        WeightDecayCallback(
+            init_lr=FLAGS.init_lr,
+            coeff=wd_coeff,
+            reg_type=FLAGS.reg_type),
         keras.callbacks.ModelCheckpoint(
             filepath=ckpt_path,
             monitor='val_loss',
             save_best_only=False,
+            save_weights_only=False,
             save_freq='epoch',
             verbose=1
         ),
@@ -142,35 +166,6 @@ def main(_):
         print("Weight decay coeff", FLAGS.prior_length)
         print()
         return
-
-    # ===============================
-    #     Set Up Last Activation
-    # ===============================
-    last_activation = []
-    for prop in FLAGS.prop:
-        if FLAGS.loss_dict[prop] == 'mse':
-            last_activation.append(None)
-        else:
-            last_activation.append(tf.nn.sigmoid)
-
-    # ===============================
-    #          Define Model
-    # ===============================
-    model = Model(
-        list_props=FLAGS.prop,
-        gconv_type=FLAGS.gconv_type,
-        predictor_readout=FLAGS.predictor_readout,
-        num_embed_layers=FLAGS.num_embed_layers,
-        embed_dim=FLAGS.embed_dim,
-        predictor_dim=FLAGS.predictor_dim,
-        num_embed_heads=FLAGS.num_embed_heads,
-        num_predictor_heads=FLAGS.num_predictor_heads,
-        embed_use_ffnn=FLAGS.embed_use_ffnn,
-        embed_dp_rate=FLAGS.embed_dp_rate,
-        embed_nm_type=FLAGS.embed_nm_type,
-        num_groups=FLAGS.num_gn_groups,
-        last_activation=last_activation
-    )
     print_model_spec()
 
     # ===============================
@@ -178,7 +173,8 @@ def main(_):
     # ===============================
     smi_data = open('./data/smiles_pretrain.txt', 'r')
     smi_data = [line.strip('\n') for line in smi_data.readlines()]
-    train(model, smi_data)
+    model, optimizer = define_model()
+    train(model, optimizer, smi_data[:100])
     return
 
 

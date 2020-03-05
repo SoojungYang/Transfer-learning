@@ -69,7 +69,7 @@ def get_single_dataset(smi,
     return ds
 
 
-def get_csv_dataset(batch_size, f_name, s_name, l_name, seed=123, shuffle=True):
+def get_csv_dataset(batch_size, f_name, s_name='smiles', l_name='label', seed=123, shuffle=True):
     smi = read_csv(f_name, s_name, l_name, seed, shuffle)
     smi = tf.data.Dataset.from_tensor_slices(smi)
 
@@ -81,7 +81,7 @@ def get_csv_dataset(batch_size, f_name, s_name, l_name, seed=123, shuffle=True):
         num_parallel_calls=7
     )
 
-    # ds = ds.apply(tf.data.experimental.ignore_errors())
+    ds = ds.apply(tf.data.experimental.ignore_errors())
     ds = ds.padded_batch(batch_size, padded_shapes=([None, 58], [None, None]))
     ds = ds.map(x_to_dict)
 

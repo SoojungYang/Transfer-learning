@@ -28,16 +28,41 @@ def benchmark(_):
     # ===============================
     #          Load Dataset
     # ===============================
+
+    """
     f_name = 'HIV'
-    total_ds = get_csv_dataset(FLAGS.batch_size, f_name=f_name, s_name='smiles', l_name='HIV_active')
-    train_ds = total_ds.take(30000)
-    test_ds = total_ds.skip(30000)
+    total_ds = get_csv_dataset(FLAGS.batch_size, f_name=f_name)
+    num_total = 41127.0
+    num_train_batch = int(num_total / FLAGS.batch_size * 0.8)
+    train_ds = total_ds.take(num_train_batch)
+    test_ds = total_ds.skip(num_train_batch)
+    """
+    f_name = 'cv_0'
+    train_ds = get_csv_dataset(FLAGS.batch_size, f_name='cv_0_tr', l_name='tox')
+    test_ds = get_csv_dataset(FLAGS.batch_size, f_name='cv_0', l_name='tox')
 
     # ===============================
     #      Load Pre-trained Model
     # ===============================
     model, optimizer = define_model()
     model.load_weights(FLAGS.ckpt_path)
+    step = tf.Variable(0, trainable=False)
+    schedule = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
+        boundaries=[FLAGS.decay_steps, FLAGS.decay_steps * 2],
+        values=[1.0, 0.1, 0.01],
+    )
+    lr = lambda: FLAGS.init_lr * schedule(step)
+    coeff = FLAGS.prior_length * (1.0 - FLAGS.embed_dp_rate)
+    wd = lambda: coeff * schedule(step)
+
+    optimizer = tfa.optimizers.AdamW(
+        weight_decay=wd,
+        learning_rate=lr,
+        beta_1=FLAGS.beta_1,
+        beta_2=FLAGS.beta_2,
+        epsilon=FLAGS.opt_epsilon
+    )
+    # model = tf.keras.models.load_model(FLAGS.ckpt_path)
     print("loaded weights of pre-trained model")
     print(model.layers)
 
@@ -46,6 +71,7 @@ def benchmark(_):
     # ===============================
     benchmark_last_activation, loss, metrics = get_task_options(FLAGS.benchmark_task_type)
     model = BenchmarkModel(model,
+                           num_embed_layers=FLAGS.num_embed_layers,
                            readout=FLAGS.benchmark_readout,
                            dp_rate=FLAGS.benchmark_dp_rate,
                            fine_tune_at=FLAGS.fine_tune_at,
@@ -57,6 +83,7 @@ def benchmark(_):
     #          Train Model
     # ===============================
     for epoch in range(FLAGS.num_epochs):
+        print("%d th epoch ------- " % epoch)
         train_step(model, optimizer, loss, train_ds, metrics, epoch, train_summary_writer)
         evaluation_step(model, test_ds, metrics, epoch, valid_summary_writer)
 
@@ -65,7 +92,6 @@ def benchmark(_):
         model_name = f_name
         save_outputs(model, test_ds, metrics, model_name)
 
-    print(model.summary())
     return
 
 
@@ -163,7 +189,6 @@ def evaluation_step(model, dataset, metrics, epoch, valid_summary_writer, mc_dro
 
     return
 
-
 def define_model():
     last_activation = []
     for prop in FLAGS.prop:
@@ -191,7 +216,7 @@ def define_model():
         embed_use_ffnn=FLAGS.embed_use_ffnn,
         embed_dp_rate=FLAGS.embed_dp_rate,
         embed_nm_type=FLAGS.embed_nm_type,
-        num_groups=FLAGS.num_groups,
+        num_groups=FLAGS.num_gn_groups,
         last_activation=last_activation
     )
 

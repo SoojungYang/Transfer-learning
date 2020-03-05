@@ -6,6 +6,7 @@ from tensorflow.keras import layers
 
 from libs.modules import NodeEmbedding
 from libs.modules import Predictor
+from libs.layers import PMAReadout, LinearReadout
 
 
 class Model(tf.keras.Model):
@@ -71,13 +72,14 @@ class Model(tf.keras.Model):
 class BenchmarkModel(tf.keras.Model):
     def __init__(self,
                  model,
+                 num_embed_layers,
                  readout,
                  dp_rate,
                  fine_tune_at=0,
                  last_activation=None):
         super(BenchmarkModel, self).__init__()
 
-        self.pre_trained = model.layers[:5]
+        self.pre_trained = model.layers[:num_embed_layers + 1]
         if readout == 'pma':
             self.readout = PMAReadout(128, 2)
         else:
@@ -96,7 +98,7 @@ class BenchmarkModel(tf.keras.Model):
         h = self.pre_trained[0](x)
 
         # NODE EMBEDDING
-        for i in range(1, 5):
+        for i in range(1, len(self.pre_trained)):
             h = self.pre_trained[i](h, adj)
 
         # READOUT

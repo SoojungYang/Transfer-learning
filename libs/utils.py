@@ -86,3 +86,22 @@ def get_regularizer(reg_type, wd=0.0):
         return tf.keras.regularizers.l2(l=wd)
     else:
         return None
+
+
+class WeightDecayCallback(tf.keras.callbacks.Callback):
+    def __init__(self, init_lr, coeff, reg_type):
+        super(WeightDecayCallback, self).__init__()
+        self.init_lr = init_lr
+        self.coeff = coeff
+        self.reg_type = reg_type
+
+    def on_epoch_end(self, epoch, logs=None):
+        wd = self.coeff * self.model.optimizer.lr / self.init_lr
+        print("\n lr: ", self.model.optimizer.lr, " wd: ", wd)
+        regularizer = get_regularizer(self.reg_type, wd)
+
+        decay_attributes = ['kernel_regularizer', 'beta_regularizer', 'gamma_regularizer']
+        for layer in self.model.layers:
+            for attr in decay_attributes:
+                if hasattr(layer, attr):
+                    setattr(layer, attr, regularizer)
